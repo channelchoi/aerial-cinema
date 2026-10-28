@@ -1,5 +1,9 @@
 # 航拍影院 · Aerial Cinema
 
+<img src="Resources/IconSource.png" width="144" alt="航拍影院图标">
+
+[下载 Mac 应用](https://github.com/channelchoi/aerial-cinema/releases/latest) · [使用说明](使用说明.md) · [MIT 代码许可](LICENSE)
+
 A tiny native macOS app for fullscreen, synchronized playback of locally downloaded Apple aerial videos. Hold Esc for 5 seconds to exit.
 
 双击“应用程序”中的 **航拍影院**，即可在所有显示器上全屏播放系统已下载的航拍视频。
