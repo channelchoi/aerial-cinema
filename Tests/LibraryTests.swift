@@ -10,7 +10,8 @@ import AVFoundation
         let real = await library.scan()
         assert(!real.isEmpty, "Download at least one aerial video before running media tests")
         print("PASS: existing library \(real.count) playable movies")
-        for entry in real { print(entry.url.lastPathComponent, String(format: "%.2fs", entry.duration)) }
+        for entry in real { print(entry.url.lastPathComponent, String(format: "%.2fs", entry.duration), entry.place.chinese, "|", entry.place.english) }
+        print("Known catalog locations: \(real.filter { $0.place != .unknown }.count)/\(real.count)")
         let testDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Tests")
         let root = testDirectory.appendingPathComponent("library-fixtures-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -20,12 +21,20 @@ import AVFoundation
         if FileManager.default.fileExists(atPath: movie.path) { try FileManager.default.removeItem(at: movie) }
         try FileManager.default.copyItem(at: fixture, to: movie)
         try Data("this is not a movie".utf8).write(to: bad)
-        let watched = VideoLibrary(directories: [root])
+        let manifest = root.appendingPathComponent("entries.json")
+        try JSONSerialization.data(withJSONObject: ["assets": [["id": "one", "accessibilityLabel": "London"]]]).write(to: manifest)
+        let watched = VideoLibrary(directories: [root], manifestURLs: [manifest])
         let check2 = await watched.scan()
         assert(check2.isEmpty)
         let first = await watched.scan()
         assert(first.count == 1 && first.first?.url.lastPathComponent == "one.mp4")
-        print("PASS: bad file rejected; stable valid file accepted")
+        assert(first[0].place == PlaceName(chinese: "伦敦 · 英国", english: "London · United Kingdom"))
+        let movieStamp = FileStamp(url: movie)
+        try JSONSerialization.data(withJSONObject: ["assets": [["id": "one", "accessibilityLabel": "Dubai"]]]).write(to: manifest)
+        let updated = await watched.scan()
+        assert(FileStamp(url: movie) == movieStamp)
+        assert(updated[0].place == PlaceName(chinese: "迪拜 · 阿联酋", english: "Dubai · United Arab Emirates"))
+        print("PASS: bad file rejected; catalog refresh updates existing video without changing media")
         let second = root.appendingPathComponent("two.mp4")
         if FileManager.default.fileExists(atPath: second.path) { try FileManager.default.removeItem(at: second) }
         try FileManager.default.copyItem(at: fixture, to: second)
@@ -33,6 +42,11 @@ import AVFoundation
         assert(check3.count == 1)
         let check4 = await watched.scan()
         assert(check4.count == 2)
+        assert(check4.first(where: { $0.url == second })?.place == .unknown)
+        try Data("broken catalog".utf8).write(to: manifest)
+        let unknown = await watched.scan()
+        assert(unknown.count == 2 && unknown.allSatisfy { $0.place == .unknown })
+        print("PASS: missing/corrupt metadata keeps videos playable with unknown location")
         print("PASS: new file requires two stable observations")
         try FileManager.default.removeItem(at: movie)
         let check5 = await watched.scan()
@@ -44,6 +58,7 @@ import AVFoundation
         print("PASS: deletions removed; runtime failure quarantined until file changes")
         try FileManager.default.removeItem(at: second)
         try FileManager.default.removeItem(at: bad)
+        try FileManager.default.removeItem(at: manifest)
         try FileManager.default.removeItem(at: root)
     }
 }

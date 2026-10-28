@@ -5,15 +5,20 @@ struct VideoEntry: Equatable {
     let url: URL
     let stamp: FileStamp
     let duration: Double
+    let place: PlaceName
 }
 
 actor VideoLibrary {
     let directories: [URL]
+    private let manifestURLs: [URL]
     private var gate = StableFileGate()
     private var checked: [URL: FileStamp] = [:]
     private var valid: [URL: VideoEntry] = [:]
     private var failed: [URL: FileStamp] = [:]
-    init(directories: [URL]) { self.directories = directories }
+    init(directories: [URL], manifestURLs: [URL]? = nil) {
+        self.directories = directories
+        self.manifestURLs = manifestURLs ?? LocationCatalog.manifestURLs(for: directories)
+    }
 
     func snapshot() -> [URL: FileStamp] {
         var found: [URL: FileStamp] = [:]
@@ -34,6 +39,7 @@ actor VideoLibrary {
     }
 
     func scan() async -> [VideoEntry] {
+        let catalog = LocationCatalog(manifestURLs: manifestURLs)
         let files = snapshot()
         let stable = gate.accept(files)
         valid = valid.filter { files[$0.key] == $0.value.stamp && failed[$0.key] != $0.value.stamp }
@@ -46,8 +52,12 @@ actor VideoLibrary {
                 let tracks = try await asset.loadTracks(withMediaType: .video)
                 guard playable, duration.isFinite, duration > 0, !tracks.isEmpty,
                       FileStamp(url: url) == stamp else { continue }
-                valid[url] = VideoEntry(url: url, stamp: stamp, duration: duration)
+                valid[url] = VideoEntry(url: url, stamp: stamp, duration: duration, place: catalog.place(forVideo: url))
             } catch { /* Incomplete and unsupported files never enter the queue. */ }
+        }
+        // A refreshed catalog can identify an existing movie without re-decoding it.
+        valid = valid.mapValues {
+            VideoEntry(url: $0.url, stamp: $0.stamp, duration: $0.duration, place: catalog.place(forVideo: $0.url))
         }
         return valid.values.sorted { $0.url.path < $1.url.path }
     }

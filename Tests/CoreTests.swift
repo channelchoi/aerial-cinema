@@ -41,7 +41,7 @@ import Foundation
         assert(bag.take() == reserved)
         print("PASS: added files, deleted files, single/empty library, cancelled reservation")
         var gate = StableFileGate()
-        let url = URL(fileURLWithPath: "/tmp/aerial-cinema-stability-test")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("aerial-cinema-stability-" + UUID().uuidString)
         try! Data([1, 2, 3]).write(to: url)
         let a = FileStamp(url: url)!
         assert(gate.accept([url: a]).isEmpty)
@@ -54,5 +54,36 @@ import Foundation
         assert(gate.accept([url: b]).isEmpty)
         try! FileManager.default.removeItem(at: url)
         print("PASS: stable downloads, size change, disappearance/reappearance")
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("aerial-locations-" + UUID().uuidString)
+        try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manifest = root.appendingPathComponent("entries.json")
+        let cases = [
+            ("New York", "纽约 · 美国", "New York · United States"),
+            ("San Francisco", "旧金山 · 美国", "San Francisco · United States"),
+            ("Los Angeles", "洛杉矶 · 美国", "Los Angeles · United States"),
+            ("London", "伦敦 · 英国", "London · United Kingdom"),
+            ("Dubai", "迪拜 · 阿联酋", "Dubai · United Arab Emirates"),
+            ("Hong Kong", "香港 · 中国", "Hong Kong · China")
+        ]
+        var assets: [[String: Any]] = cases.enumerated().map { index, item in
+            ["id": "ASSET-\(index)", "accessibilityLabel": item.0]
+        }
+        assets.append(["id": "UNSUPPORTED", "accessibilityLabel": "A region we cannot identify"])
+        assets.append(["id": "UNLABELED"])
+        try! JSONSerialization.data(withJSONObject: ["assets": assets.reversed().map { $0 }]).write(to: manifest)
+        let catalog = LocationCatalog(manifestURLs: [manifest])
+        for (index, item) in cases.enumerated() {
+            let place = catalog.place(forVideo: root.appendingPathComponent("asset-\(index).MOV"))
+            assert(place.chinese == item.1 && place.english == item.2)
+        }
+        for filename in ["UNSUPPORTED.mov", "UNLABELED.mp4", "London.mov", "missing.mov"] {
+            assert(catalog.place(forVideo: root.appendingPathComponent(filename)) == .unknown)
+        }
+        try! Data("corrupt manifest".utf8).write(to: manifest)
+        assert(LocationCatalog(manifestURLs: [manifest]).place(forVideo: root.appendingPathComponent("ASSET-0.mov")) == .unknown)
+        print("PASS: bilingual locations follow asset IDs, all six cities, unknown/missing/corrupt catalog")
+
     }
 }

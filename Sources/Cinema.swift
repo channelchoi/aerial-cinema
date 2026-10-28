@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import QuartzCore
+import CoreText
 import IOKit.pwr_mgt
 
 @MainActor func trace(_ message: String) {
@@ -33,44 +34,112 @@ import IOKit.pwr_mgt
     let video = AVPlayerLayer()
     private let track = CAShapeLayer()
     private let arc = CAShapeLayer()
-    private let overlay = CALayer()
+    private let ring = CALayer()
+    private let location = CALayer()
+    private let chinese = CATextLayer()
+    private let english = CATextLayer()
+    private var isHolding = false
+    private var hasPlace = false
+    private(set) var place: PlaceName?
     override var acceptsFirstResponder: Bool { true }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer!.backgroundColor = NSColor.black.cgColor
         video.videoGravity = .resizeAspectFill
         layer!.addSublayer(video)
-        layer!.addSublayer(overlay)
-        overlay.addSublayer(track); overlay.addSublayer(arc)
+        layer!.addSublayer(location)
+        layer!.addSublayer(ring)
+        location.addSublayer(chinese); location.addSublayer(english)
+        ring.addSublayer(track); ring.addSublayer(arc)
+        configure(chinese, size: 12)
+        configure(english, size: 10)
         for shape in [track, arc] {
             shape.fillColor = nil; shape.lineWidth = 2; shape.lineCap = .round
         }
         track.strokeColor = NSColor.white.withAlphaComponent(0.23).cgColor
         arc.strokeColor = NSColor.white.withAlphaComponent(0.95).cgColor
         arc.strokeEnd = 0
-        overlay.isHidden = true
-        overlay.zPosition = 100
+        location.opacity = 0
+        ring.opacity = 0
+        location.zPosition = 100; ring.zPosition = 100
         needsLayout = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func configure(_ text: CATextLayer, size: CGFloat) {
+        let font = NSFont.systemFont(ofSize: size)
+        text.font = CTFontCreateWithName(font.fontName as CFString, size, nil)
+        text.fontSize = size
+        text.alignmentMode = .left
+        text.isWrapped = false
+        text.truncationMode = .end
+        text.foregroundColor = NSColor.white.cgColor
+        text.shadowColor = NSColor.black.cgColor
+        text.shadowOpacity = 0.65
+        text.shadowRadius = 1.5
+        text.shadowOffset = CGSize(width: 0, height: -1)
+    }
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
         video.frame = bounds
-        overlay.frame = bounds
+        ring.frame = bounds
+        location.frame = bounds
         for shape in [track, arc] { shape.frame = bounds }
-        let center = CGPoint(x: 36, y: 36)
+        let width = max(0, min(480, bounds.width - 48))
+        english.frame = CGRect(x: 24, y: 24, width: width, height: 14)
+        chinese.frame = CGRect(x: 24, y: 41, width: width, height: 17)
+        let scale = window?.backingScaleFactor ?? 2
+        chinese.contentsScale = scale; english.contentsScale = scale
         let path = CGMutablePath()
-        path.addArc(center: center, radius: 12, startAngle: .pi / 2, endAngle: .pi / 2 - 2 * .pi, clockwise: true)
+        path.addArc(center: CGPoint(x: 36, y: 36), radius: 12,
+                    startAngle: .pi / 2, endAngle: .pi / 2 - 2 * .pi, clockwise: true)
         track.path = path; arc.path = path
         CATransaction.commit()
     }
-    func showProgress(_ value: Double?) {
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+    }
+    func setPlace(_ place: PlaceName) {
+        self.place = place
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        overlay.isHidden = value == nil
-        arc.strokeEnd = CGFloat(value ?? 0)
+        chinese.string = place.chinese
+        english.string = place.english
+        if !hasPlace {
+            hasPlace = true
+            location.opacity = isHolding ? 0 : 1
+        }
         CATransaction.commit()
+    }
+    private func fade(_ target: CALayer, to opacity: Float, at time: CFTimeInterval) {
+        let visible = target.presentation()?.opacity ?? target.opacity
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        target.opacity = opacity
+        CATransaction.commit()
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = visible
+        animation.toValue = opacity
+        animation.duration = 0.25
+        animation.beginTime = target.convertTime(time, from: nil)
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        target.add(animation, forKey: "hold-crossfade")
+    }
+    func showProgress(_ value: Double?, at time: CFTimeInterval = CACurrentMediaTime()) {
+        let holding = value != nil
+        if holding != isHolding {
+            isHolding = holding
+            fade(location, to: holding || !hasPlace ? 0 : 1, at: time)
+            fade(ring, to: holding ? 1 : 0, at: time)
+            trace("OVERLAY mode=\(holding ? "ring" : "location") zh=\(place?.chinese ?? "")")
+        }
+        if let progress = value {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            arc.strokeEnd = CGFloat(progress)
+            CATransaction.commit()
+        }
     }
 }
 
@@ -331,7 +400,9 @@ import IOKit.pwr_mgt
     }
     private func cancelHold() {
         if hold.beganAt != nil { trace("HOLD_CANCEL") }
-        hold.cancel(); views.forEach { $0.showProgress(nil) }
+        hold.cancel()
+        let time = CACurrentMediaTime()
+        views.forEach { $0.showProgress(nil, at: time) }
     }
 
     private func update() {
@@ -340,7 +411,8 @@ import IOKit.pwr_mgt
         if hold.beganAt != nil {
             guard NSApp.isActive, !sleeping else { cancelHold(); return }
             let progress = hold.progress(at: now)
-            views.forEach { $0.showProgress(progress) }
+            let time = CACurrentMediaTime()
+            views.forEach { $0.showProgress(progress, at: time) }
             if hold.isComplete(at: now) { trace("HOLD_COMPLETE"); finish(); return }
         }
         guard !sleeping, !suspended else { return }
@@ -385,6 +457,9 @@ import IOKit.pwr_mgt
     private func apply(_ found: [VideoEntry]) {
         entries = Dictionary(uniqueKeysWithValues: found.map { ($0.url, $0) })
         bag.update(found.map(\.url))
+        if let url = current?.entry.url, let entry = entries[url] {
+            views.forEach { $0.setPlace(entry.place) }
+        }
         if let next = nextGroup, entries[next.entry.url] != next.entry {
             let wasBusy = busy
             cancelPipeline()
@@ -442,6 +517,8 @@ import IOKit.pwr_mgt
         for (view, player) in zip(views, group.players) { view.video.player = player }
         CATransaction.commit()
         current = group
+        views.forEach { $0.setPlace(group.entry.place) }
+        trace("LOCATION zh=\(group.entry.place.chinese) en=\(group.entry.place.english)")
         reserved = nil
         group.run(from: time)
         old?.stop()
