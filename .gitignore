@@ -1,0 +1,16 @@
+.DS_Store
+build/
+qa/
+Tests/clips/
+Tests/library-fixtures*/
+Tests/*.log
+Tests/core-tests
+Tests/library-tests
+Tests/screen-probe
+Tests/ScreenProbe.swift
+missing.json
+测试记录.md
+本机交付信息.md
+Resources/IconOriginal.png
+Resources/图标编辑提示词.txt
+发行包/
